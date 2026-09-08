@@ -1,0 +1,21 @@
+{
+  "results": [
+    {
+      "name": "",
+      "latitude": 1.0,
+      "longitude": 2.0,
+      "country": "Nowhere"
+    },
+    {
+      "name": "Missing coordinates",
+      "country": "Nowhere"
+    },
+    {
+      "name": "Bad region",
+      "latitude": 1.0,
+      "longitude": 2.0,
+      "country": "Nowhere",
+      "admin1": 42
+    }
+  ]
+}

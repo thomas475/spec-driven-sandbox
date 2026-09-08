@@ -1,0 +1,7 @@
+"""Executable module entry point."""
+
+from weather_forecast.bootstrap import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
