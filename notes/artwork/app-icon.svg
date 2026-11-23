@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Notes app icon</title>
+  <rect width="512" height="512" rx="112" fill="#000000"/>
+  <g transform="translate(249 262) scale(.80) rotate(135) translate(-256 -256)" fill="#FFFFFF">
+    <path d="M82 216h44v80H82q-22 0-22-22v-36q0-22 22-22Z"/>
+    <rect x="140" y="216" width="226" height="80" rx="8"/>
+    <path d="m380 216 78 40-78 40Z"/>
+  </g>
+</svg>
