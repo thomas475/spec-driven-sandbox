@@ -66,6 +66,23 @@ class RoomDraftRepository(
         draft.id
     }
 
+    override suspend fun createImportedDraft(name: String?, content: String): String =
+        database.withTransaction {
+            val existingDrafts = dao.getDrafts()
+            val importedName = name
+                ?.trim()
+                ?.takeIf(String::isNotEmpty)
+                ?: DraftName.nextUntitled(existingDrafts.map { it.name })
+            val draft = newDraft(
+                name = importedName,
+                content = content,
+                displayOrder = (dao.getMaxDisplayOrder() ?: -1L) + 1L,
+            )
+            dao.insertDraft(draft)
+            dao.upsertWorkspace(WorkspaceEntity(selectedDraftId = draft.id))
+            draft.id
+        }
+
     override suspend fun renameDraft(id: String, name: String) {
         val trimmedName = name.trim()
         if (trimmedName.isEmpty()) {
@@ -134,12 +151,16 @@ class RoomDraftRepository(
         }
     }
 
-    private fun newDraft(name: String, displayOrder: Long): DraftEntity {
+    private fun newDraft(
+        name: String,
+        displayOrder: Long,
+        content: String = "",
+    ): DraftEntity {
         val now = clock.currentTimeMillis()
         return DraftEntity(
             id = idGenerator.create(),
             name = name,
-            content = "",
+            content = content,
             displayOrder = displayOrder,
             createdAt = now,
             updatedAt = now,

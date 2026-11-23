@@ -356,7 +356,7 @@ class NotesViewModelTest {
     }
 }
 
-private class FakeDraftRepository(
+internal class FakeDraftRepository(
     private val operationDelayMillis: Long = 0,
     private val saveDelayMillis: Long = 0,
     var initializationFailuresRemaining: Int = 0,
@@ -371,6 +371,7 @@ private class FakeDraftRepository(
     val saveCalls = mutableListOf<Pair<String, String>>()
     var failNextSaveFor: String? = null
     var renameFailuresRemaining: Int = 0
+    var importFailuresRemaining: Int = 0
 
     override suspend fun initialize() {
         if (initializationFailuresRemaining > 0) {
@@ -383,6 +384,22 @@ private class FakeDraftRepository(
         val number = mutableDrafts.value.size + 1
         val id = "draft-$number"
         mutableDrafts.value = mutableDrafts.value + draft(id, "Untitled $number", number - 1L)
+        mutableWorkspace.value = Workspace(id)
+        id
+    }
+
+    override suspend fun createImportedDraft(name: String?, content: String): String = structuralOperation {
+        if (importFailuresRemaining > 0) {
+            importFailuresRemaining -= 1
+            error("Import creation failed")
+        }
+        val number = mutableDrafts.value.size + 1
+        val id = "draft-$number"
+        mutableDrafts.value = mutableDrafts.value + draft(
+            id = id,
+            name = name?.trim()?.takeIf(String::isNotEmpty) ?: "Untitled $number",
+            displayOrder = number - 1L,
+        ).copy(content = content)
         mutableWorkspace.value = Workspace(id)
         id
     }

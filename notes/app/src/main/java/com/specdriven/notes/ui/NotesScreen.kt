@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -88,6 +90,10 @@ fun NotesScreen(
                 onRename = {
                     state.selectedDraftId?.let { onAction(NotesAction.OpenRename(it)) }
                 },
+                importEnabled = state.importProgress == null,
+                exportEnabled = state.selectedDraftId != null && state.exportProgress == null,
+                onImport = { onAction(NotesAction.RequestImportText) },
+                onExport = { onAction(NotesAction.RequestExportText) },
             )
             state.error?.let { error ->
                 ErrorBanner(
@@ -144,13 +150,22 @@ private fun ErrorBanner(
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val message = when (error.operation) {
-        NotesOperation.INITIALIZE -> "Drafts could not be loaded"
-        NotesOperation.CREATE -> "Draft could not be created"
-        NotesOperation.RENAME -> "Draft could not be renamed"
-        NotesOperation.SELECT -> "Draft could not be selected"
-        NotesOperation.DELETE -> "Draft could not be deleted"
-        NotesOperation.SAVE -> "Changes could not be saved"
+    val message = when (error.cause) {
+        NotesErrorCause.DOCUMENT_READ_FAILED -> "Text file could not be read"
+        NotesErrorCause.INVALID_TEXT_ENCODING -> "Text file is not valid UTF-8"
+        NotesErrorCause.DOCUMENT_TOO_LARGE -> "Text file is larger than 1 MiB"
+        NotesErrorCause.IMPORTED_DRAFT_CREATION_FAILED -> "Imported draft could not be created"
+        NotesErrorCause.DOCUMENT_WRITE_FAILED -> "Text file could not be exported"
+        null -> when (error.operation) {
+            NotesOperation.INITIALIZE -> "Drafts could not be loaded"
+            NotesOperation.CREATE -> "Draft could not be created"
+            NotesOperation.RENAME -> "Draft could not be renamed"
+            NotesOperation.SELECT -> "Draft could not be selected"
+            NotesOperation.DELETE -> "Draft could not be deleted"
+            NotesOperation.SAVE -> "Changes could not be saved"
+            NotesOperation.IMPORT -> "Text file could not be imported"
+            NotesOperation.EXPORT -> "Text file could not be exported"
+        }
     }
     Surface(
         modifier = Modifier
@@ -281,6 +296,10 @@ private fun DraftTabBar(
     onClose: (String) -> Unit,
     onAdd: () -> Unit,
     onRename: () -> Unit,
+    importEnabled: Boolean,
+    exportEnabled: Boolean,
+    onImport: () -> Unit,
+    onExport: () -> Unit,
 ) {
     val listState = rememberLazyListState()
     val selectedIndex = drafts.indexOfFirst { it.id == selectedDraftId }
@@ -328,6 +347,53 @@ private fun DraftTabBar(
             enabled = selectedDraftId != null,
             onClick = onRename,
         )
+        TransferMenu(
+            importEnabled = importEnabled,
+            exportEnabled = exportEnabled,
+            onImport = onImport,
+            onExport = onExport,
+        )
+    }
+}
+
+@Composable
+private fun TransferMenu(
+    importEnabled: Boolean,
+    exportEnabled: Boolean,
+    onImport: () -> Unit,
+    onExport: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TabActionButton(
+            label = "⋮",
+            description = "More actions",
+            testTag = "more-actions",
+            onClick = { expanded = true },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Import text file") },
+                onClick = {
+                    expanded = false
+                    onImport()
+                },
+                enabled = importEnabled,
+                modifier = Modifier.testTag("import-text-file"),
+            )
+            DropdownMenuItem(
+                text = { Text("Export selected draft") },
+                onClick = {
+                    expanded = false
+                    onExport()
+                },
+                enabled = exportEnabled,
+                modifier = Modifier.testTag("export-text-file"),
+            )
+        }
     }
 }
 
@@ -341,7 +407,7 @@ private fun DraftTab(
     val colors = MaterialTheme.colorScheme
     Surface(
         modifier = Modifier
-            .widthIn(min = 96.dp, max = 200.dp)
+            .widthIn(min = 96.dp, max = 176.dp)
             .heightIn(min = 48.dp)
             .clip(MaterialTheme.shapes.small)
             .selectable(

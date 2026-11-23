@@ -10,9 +10,9 @@ interface DraftRepository {
 
     suspend fun initialize()
     suspend fun createDraft(): String
+    suspend fun createImportedDraft(name: String?, content: String): String
     suspend fun renameDraft(id: String, name: String)
     suspend fun selectDraft(id: String)
     suspend fun saveContent(id: String, content: String)
     suspend fun deleteDraft(id: String)
 }
-

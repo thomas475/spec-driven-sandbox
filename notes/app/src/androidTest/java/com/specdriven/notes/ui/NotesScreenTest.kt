@@ -5,11 +5,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.specdriven.notes.domain.Draft
 import com.specdriven.notes.ui.theme.NotesTheme
@@ -54,7 +58,8 @@ class NotesScreenTest {
 
         composeRule.onNodeWithTag("add-draft").performClick()
         composeRule.onNodeWithTag("rename-draft").performClick()
-        composeRule.onNodeWithTag("draft-tab-one").performClick()
+        composeRule.onNodeWithTag("draft-tab-one")
+            .performSemanticsAction(SemanticsActions.OnClick)
         composeRule.onNodeWithTag("close-draft-one").performClick()
 
         assertEquals(
@@ -81,6 +86,56 @@ class NotesScreenTest {
         composeRule.runOnIdle { state = readyState(drafts, "id-11") }
 
         composeRule.onNodeWithTag("draft-tab-id-11").assertIsDisplayed().assertIsSelected()
+        composeRule.onNodeWithTag("more-actions").assertIsDisplayed()
+    }
+
+    @Test
+    fun transferMenuDispatchesImportAndExportActions() {
+        val actions = mutableListOf<NotesAction>()
+        composeRule.setContent {
+            NotesTheme {
+                NotesScreen(
+                    readyState(listOf(draft("one", "One", 0)), "one"),
+                    onAction = actions::add,
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("more-actions").performClick()
+        composeRule.onNodeWithTag("import-text-file").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("more-actions").performClick()
+        composeRule.onNodeWithTag("export-text-file").assertIsDisplayed().performClick()
+
+        assertEquals(
+            listOf(NotesAction.RequestImportText, NotesAction.RequestExportText),
+            actions,
+        )
+    }
+
+    @Test
+    fun transferMenuReflectsBusyAndMissingSelectionStates() {
+        var state by mutableStateOf(
+            readyState(listOf(draft("one", "One", 0)), "one").copy(
+                importProgress = NotesTransferProgress(1, NotesTransferPhase.PROCESSING),
+            ),
+        )
+        composeRule.setContent {
+            NotesTheme { NotesScreen(state, onAction = {}) }
+        }
+
+        composeRule.onNodeWithTag("more-actions").performClick()
+        composeRule.onNodeWithTag("import-text-file").assertIsNotEnabled()
+        composeRule.onNodeWithTag("export-text-file").assertIsEnabled()
+
+        composeRule.runOnIdle {
+            state = state.copy(
+                selectedDraftId = null,
+                importProgress = null,
+            )
+        }
+        composeRule.onNodeWithTag("more-actions").performClick()
+        composeRule.onNodeWithTag("import-text-file").assertIsEnabled()
+        composeRule.onNodeWithTag("export-text-file").assertIsNotEnabled()
     }
 
     private fun readyState(drafts: List<Draft>, selectedId: String) = NotesUiState(

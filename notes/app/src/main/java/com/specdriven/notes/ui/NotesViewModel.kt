@@ -4,8 +4,15 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.specdriven.notes.data.DraftRepository
+import com.specdriven.notes.data.document.DocumentGateway
+import com.specdriven.notes.data.document.DocumentReadFailedException
+import com.specdriven.notes.data.document.DocumentTooLargeException
+import com.specdriven.notes.data.document.DocumentWriteFailedException
+import com.specdriven.notes.data.document.InvalidTextEncodingException
+import com.specdriven.notes.data.document.TextDocumentName
 import com.specdriven.notes.domain.Draft
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +25,7 @@ import kotlinx.coroutines.sync.withLock
 
 class NotesViewModel(
     private val repository: DraftRepository,
+    private val documentGateway: DocumentGateway = UnavailableDocumentGateway,
 ) : ViewModel() {
     private val structuralMutex = Mutex()
     private val editorBuffers = mutableMapOf<String, EditorBuffer>()
@@ -25,6 +33,9 @@ class NotesViewModel(
     private val savingDraftIds = mutableSetOf<String>()
     private val flushAfterSaveDraftIds = mutableSetOf<String>()
     private var workspaceJob: Job? = null
+    private var nextTransferOperationId = 0L
+    private var pendingImportPickerOperationId: Long? = null
+    private var pendingExportSnapshot: ExportSnapshot? = null
     private val _uiState = MutableStateFlow(NotesUiState())
     val uiState: StateFlow<NotesUiState> = _uiState.asStateFlow()
 
@@ -40,6 +51,11 @@ class NotesViewModel(
             ) {
                 repository.createDraft()
             }
+            NotesAction.RequestImportText -> requestImportText()
+            is NotesAction.PickerRequestConsumed -> consumePickerRequest(action.operationId)
+            is NotesAction.ImportDocumentResult -> completeImportPicker(action)
+            NotesAction.RequestExportText -> requestExportText()
+            is NotesAction.ExportDocumentResult -> completeExportPicker(action)
             is NotesAction.SelectDraft -> performStructural(
                 operation = NotesOperation.SELECT,
                 draftId = action.draftId,
@@ -325,6 +341,210 @@ class NotesViewModel(
                 closeDialogFor(retry.draftId)
             }
             is NotesRetry.Save -> saveImmediately(retry.draftId)
+            NotesRetry.ImportText -> requestImportText()
+            NotesRetry.ExportText -> requestExportText()
+        }
+    }
+
+    private fun requestImportText() {
+        val state = _uiState.value
+        if (state.importProgress != null || state.pickerRequest != null) {
+            return
+        }
+        val operationId = ++nextTransferOperationId
+        pendingImportPickerOperationId = operationId
+        _uiState.update {
+            it.copy(
+                pickerRequest = NotesPickerRequest.ImportText(operationId),
+                importProgress = NotesTransferProgress(
+                    operationId = operationId,
+                    phase = NotesTransferPhase.AWAITING_PICKER,
+                ),
+                error = it.error?.takeUnless { error ->
+                    error.operation == NotesOperation.IMPORT
+                },
+            )
+        }
+    }
+
+    private fun consumePickerRequest(operationId: Long) {
+        _uiState.update { state ->
+            state.copy(
+                pickerRequest = state.pickerRequest?.takeUnless {
+                    it.operationId == operationId
+                },
+            )
+        }
+    }
+
+    private fun completeImportPicker(action: NotesAction.ImportDocumentResult) {
+        if (pendingImportPickerOperationId != action.operationId) {
+            return
+        }
+        pendingImportPickerOperationId = null
+        _uiState.update { state ->
+            state.copy(
+                pickerRequest = state.pickerRequest?.takeUnless {
+                    it.operationId == action.operationId
+                },
+                importProgress = action.document?.let {
+                    NotesTransferProgress(
+                        operationId = action.operationId,
+                        phase = NotesTransferPhase.PROCESSING,
+                    )
+                },
+            )
+        }
+        val documentReference = action.document ?: return
+        viewModelScope.launch {
+            val importedDocument = try {
+                documentGateway.readText(documentReference)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: Exception) {
+                val cause = when (exception) {
+                    is DocumentTooLargeException -> NotesErrorCause.DOCUMENT_TOO_LARGE
+                    is InvalidTextEncodingException -> NotesErrorCause.INVALID_TEXT_ENCODING
+                    is DocumentReadFailedException -> NotesErrorCause.DOCUMENT_READ_FAILED
+                    else -> NotesErrorCause.DOCUMENT_READ_FAILED
+                }
+                failImport(action.operationId, cause)
+                return@launch
+            }
+
+            try {
+                structuralMutex.withLock {
+                    repository.createImportedDraft(
+                        name = TextDocumentName.importedDraftName(importedDocument.displayName),
+                        content = importedDocument.content,
+                    )
+                }
+                _uiState.update { state ->
+                    state.copy(
+                        importProgress = state.importProgress?.takeUnless {
+                            it.operationId == action.operationId
+                        },
+                        error = state.error?.takeUnless {
+                            it.operation == NotesOperation.IMPORT
+                        },
+                    )
+                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                failImport(
+                    operationId = action.operationId,
+                    cause = NotesErrorCause.IMPORTED_DRAFT_CREATION_FAILED,
+                )
+            }
+        }
+    }
+
+    private fun failImport(operationId: Long, cause: NotesErrorCause) {
+        _uiState.update { state ->
+            state.copy(
+                importProgress = state.importProgress?.takeUnless {
+                    it.operationId == operationId
+                },
+                error = NotesUiError(
+                    operation = NotesOperation.IMPORT,
+                    retry = NotesRetry.ImportText,
+                    cause = cause,
+                ),
+            )
+        }
+    }
+
+    private fun requestExportText() {
+        val state = _uiState.value
+        if (state.exportProgress != null || state.pickerRequest != null) {
+            return
+        }
+        val selectedDraft = state.selectedDraft ?: return
+        val operationId = ++nextTransferOperationId
+        val snapshot = ExportSnapshot(
+            operationId = operationId,
+            draftId = selectedDraft.id,
+            suggestedFileName = TextDocumentName.suggestedExportName(selectedDraft.name),
+            content = state.selectedEditorValue.text,
+        )
+        pendingExportSnapshot = snapshot
+        _uiState.update {
+            it.copy(
+                pickerRequest = NotesPickerRequest.ExportText(
+                    operationId = operationId,
+                    suggestedFileName = snapshot.suggestedFileName,
+                ),
+                exportProgress = NotesTransferProgress(
+                    operationId = operationId,
+                    phase = NotesTransferPhase.AWAITING_PICKER,
+                ),
+                error = it.error?.takeUnless { error ->
+                    error.operation == NotesOperation.EXPORT
+                },
+            )
+        }
+    }
+
+    private fun completeExportPicker(action: NotesAction.ExportDocumentResult) {
+        val snapshot = pendingExportSnapshot?.takeIf {
+            it.operationId == action.operationId
+        } ?: return
+        pendingExportSnapshot = null
+        val capturedDraftStillExists = _uiState.value.drafts.any { it.id == snapshot.draftId }
+        _uiState.update { state ->
+            state.copy(
+                pickerRequest = state.pickerRequest?.takeUnless {
+                    it.operationId == action.operationId
+                },
+                exportProgress = if (action.document != null && capturedDraftStillExists) {
+                    NotesTransferProgress(
+                        operationId = action.operationId,
+                        phase = NotesTransferPhase.PROCESSING,
+                    )
+                } else {
+                    null
+                },
+            )
+        }
+        val documentReference = action.document
+            ?.takeIf { capturedDraftStillExists }
+            ?: return
+        viewModelScope.launch {
+            try {
+                documentGateway.writeText(documentReference, snapshot.content)
+                _uiState.update { state ->
+                    state.copy(
+                        exportProgress = state.exportProgress?.takeUnless {
+                            it.operationId == action.operationId
+                        },
+                        error = state.error?.takeUnless {
+                            it.operation == NotesOperation.EXPORT
+                        },
+                    )
+                }
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: DocumentWriteFailedException) {
+                failExport(action.operationId)
+            } catch (_: Exception) {
+                failExport(action.operationId)
+            }
+        }
+    }
+
+    private fun failExport(operationId: Long) {
+        _uiState.update { state ->
+            state.copy(
+                exportProgress = state.exportProgress?.takeUnless {
+                    it.operationId == operationId
+                },
+                error = NotesUiError(
+                    operation = NotesOperation.EXPORT,
+                    retry = NotesRetry.ExportText,
+                    cause = NotesErrorCause.DOCUMENT_WRITE_FAILED,
+                ),
+            )
         }
     }
 
@@ -343,6 +563,27 @@ class NotesViewModel(
         const val SAVE_DEBOUNCE_MILLIS = 500L
     }
 }
+
+private object UnavailableDocumentGateway : DocumentGateway {
+    override suspend fun readText(
+        document: com.specdriven.notes.data.document.DocumentReference,
+    ): com.specdriven.notes.data.document.ImportedTextDocument =
+        throw DocumentReadFailedException(IllegalStateException("Document gateway unavailable"))
+
+    override suspend fun writeText(
+        document: com.specdriven.notes.data.document.DocumentReference,
+        content: String,
+    ) {
+        throw DocumentWriteFailedException(IllegalStateException("Document gateway unavailable"))
+    }
+}
+
+private data class ExportSnapshot(
+    val operationId: Long,
+    val draftId: String,
+    val suggestedFileName: String,
+    val content: String,
+)
 
 private data class EditorBuffer(
     val value: TextFieldValue,

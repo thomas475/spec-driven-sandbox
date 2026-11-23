@@ -1,6 +1,6 @@
 # Notes
 
-A native Android plain-text notes app built with Kotlin and Jetpack Compose. It provides a dark editor, multiple tabs, and local drafts that survive closing and reopening the app.
+A native Android plain-text notes app built with Kotlin and Jetpack Compose. It provides a dark editor, multiple tabs, local drafts that survive closing and reopening the app, and explicit `.txt` import and export.
 
 ## Requirements
 
@@ -35,6 +35,8 @@ Install the APK on a connected Android device or emulator:
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Use the overflow menu beside the tab actions to import one UTF-8 `.txt` file or export the selected draft. Import accepts files up to 1 MiB. Transfers use Android's system document picker and require no storage permission.
 
 ## Tests
 

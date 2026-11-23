@@ -90,14 +90,34 @@ class NotesAccessibilityTest {
             .assertContentDescriptionEquals("Add draft")
         composeRule.onNodeWithTag("rename-draft")
             .assertContentDescriptionEquals("Rename selected draft")
+        composeRule.onNodeWithTag("more-actions")
+            .assertContentDescriptionEquals("More actions")
         composeRule.onNodeWithTag("editor")
             .assertContentDescriptionEquals("Draft editor")
 
-        listOf("add-draft", "rename-draft", "close-draft-one").forEach { tag ->
+        listOf("add-draft", "rename-draft", "more-actions", "close-draft-one").forEach { tag ->
             val bounds = composeRule.onNodeWithTag(tag).getUnclippedBoundsInRoot()
             assertTrue("$tag width", bounds.right - bounds.left >= 48.dp)
             assertTrue("$tag height", bounds.bottom - bounds.top >= 48.dp)
         }
+    }
+
+    @Test
+    fun longTabKeepsCloseControlInsideVisibleStrip() {
+        composeRule.setContent {
+            NotesTheme {
+                Box(Modifier.size(width = 320.dp, height = 640.dp)) {
+                    NotesScreen(readyState(), onAction = {})
+                }
+            }
+        }
+
+        val stripBounds = composeRule.onNodeWithTag("tab-strip").getUnclippedBoundsInRoot()
+        val closeBounds = composeRule.onNodeWithTag("close-draft-one").getUnclippedBoundsInRoot()
+
+        assertTrue("close control starts inside tab strip", closeBounds.left >= stripBounds.left)
+        assertTrue("close control ends inside tab strip", closeBounds.right <= stripBounds.right)
+        assertTrue("close control keeps full width", closeBounds.right - closeBounds.left >= 48.dp)
     }
 
     @Test
@@ -114,6 +134,7 @@ class NotesAccessibilityTest {
 
         composeRule.onNodeWithTag("add-draft").assertIsDisplayed()
         composeRule.onNodeWithTag("rename-draft").assertIsDisplayed()
+        composeRule.onNodeWithTag("more-actions").assertIsDisplayed()
         composeRule.onNodeWithTag("editor").assertIsDisplayed()
     }
 
@@ -134,6 +155,8 @@ class NotesAccessibilityTest {
             NotesOperation.SELECT -> NotesRetry.Select("one")
             NotesOperation.DELETE -> NotesRetry.Delete("one")
             NotesOperation.SAVE -> NotesRetry.Save("one")
+            NotesOperation.IMPORT -> NotesRetry.ImportText
+            NotesOperation.EXPORT -> NotesRetry.ExportText
         },
     )
 }

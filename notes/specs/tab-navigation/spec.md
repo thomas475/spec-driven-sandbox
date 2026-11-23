@@ -11,6 +11,7 @@ Let users see, select, and move among multiple open drafts without losing their 
 - Selecting a tab displays that draft's current name and content.
 - Scroll the tab strip horizontally when tabs exceed the available width.
 - Keep a newly selected tab visible within the tab strip.
+- Constrain each tab so its close control remains fully visible within the tab strip.
 - Keep the tab strip fixed while editor content scrolls vertically.
 
 ## Error Cases
@@ -26,4 +27,4 @@ Let users see, select, and move among multiple open drafts without losing their 
 3. Enough tabs to exceed screen width can be reached by horizontal scrolling.
 4. Selecting an off-screen tab scrolls it into view.
 5. Vertically scrolling a long draft leaves the tab strip visible.
-
+6. A long tab name is truncated while its complete close control remains visible on the narrowest supported layout.

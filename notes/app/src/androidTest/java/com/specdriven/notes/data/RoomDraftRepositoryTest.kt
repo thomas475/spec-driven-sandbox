@@ -112,6 +112,63 @@ class RoomDraftRepositoryTest {
     }
 
     @Test
+    fun importedDraftStoresFinalNameAndContentThenAppendsAndSelects() = runBlocking {
+        repository.initialize()
+        val firstDraft = repository.drafts.first().single()
+
+        val importedId = repository.createImportedDraft(
+            name = "  Imported note  ",
+            content = "First\r\nΚαλημέρα 👋  ",
+        )
+
+        val drafts = repository.drafts.first()
+        val imported = drafts.last()
+        assertEquals(listOf(firstDraft.id, importedId), drafts.map { it.id })
+        assertEquals("Imported note", imported.name)
+        assertEquals("First\r\nΚαλημέρα 👋  ", imported.content)
+        assertEquals(1L, imported.displayOrder)
+        assertEquals(imported.createdAt, imported.updatedAt)
+        assertEquals(importedId, repository.workspace.first().selectedDraftId)
+    }
+
+    @Test
+    fun importedDraftAllowsDuplicatesAndBlankNameUsesAvailableAutomaticName() = runBlocking {
+        repository.initialize()
+        val secondId = repository.createDraft()
+        repository.renameDraft(secondId, "Project")
+
+        val automaticId = repository.createImportedDraft(" \n ", "Automatic")
+        val duplicateId = repository.createImportedDraft("Project", "Duplicate")
+
+        val drafts = repository.drafts.first()
+        assertEquals("Untitled 2", drafts.first { it.id == automaticId }.name)
+        assertEquals("Project", drafts.first { it.id == duplicateId }.name)
+        assertEquals(2, drafts.count { it.name == "Project" })
+        assertEquals(duplicateId, repository.workspace.first().selectedDraftId)
+    }
+
+    @Test
+    fun failedImportedDraftInsertRollsBackDraftsAndSelection() = runBlocking {
+        val duplicateIdRepository = RoomDraftRepository(
+            database = database,
+            idGenerator = IdGenerator { "duplicate-id" },
+            clock = Clock { ++currentTime },
+        )
+        duplicateIdRepository.initialize()
+        val draftsBefore = duplicateIdRepository.drafts.first()
+        val workspaceBefore = duplicateIdRepository.workspace.first()
+
+        assertThrows(Exception::class.java) {
+            runBlocking {
+                duplicateIdRepository.createImportedDraft("Imported", "Must not appear")
+            }
+        }
+
+        assertEquals(draftsBefore, duplicateIdRepository.drafts.first())
+        assertEquals(workspaceBefore, duplicateIdRepository.workspace.first())
+    }
+
+    @Test
     fun renameTrimsAllowsDuplicatesAndChangesOnlyNameAndUpdatedAt() = runBlocking {
         repository.initialize()
         val secondId = repository.createDraft()

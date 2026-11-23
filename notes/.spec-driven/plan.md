@@ -33,6 +33,7 @@ This plan turns the constitution and the feature specifications under `specs/` i
 - `NotesApplication` creates the Room database and the single repository instance.
 - `MainActivity` hosts one Compose screen and uses `adjustResize` for the software keyboard.
 - The manifest declares no network permissions.
+- Import and export use the Android Storage Access Framework and require no storage permission.
 - Disable Android cloud backup and device-to-device transfer for app data so drafts remain local.
 - Use one always-dark theme in the first release; there is no theme toggle or system-theme switching.
 - Export Room schemas into `app/schemas/` and commit them.
@@ -406,6 +407,17 @@ Exit: unit, Room, Compose, lifecycle, reliability, and accessibility checks pass
 
 Exit: the installable debug APK and reproducible build/test instructions are available on the server.
 
+### Phase 6 — Text File Transfer Extension
+
+- [ ] Add a bounded UTF-8 document gateway using the Android Storage Access Framework.
+- [ ] Add atomic creation of a named draft with imported content.
+- [ ] Add ViewModel coordination for import, export, cancellation, errors, and retry.
+- [ ] Add system-picker launchers and accessible transfer actions to the existing screen.
+- [ ] Automate the text-file-transfer acceptance criteria and affected draft, save, lifecycle, and restart flows.
+- [ ] Run the complete quality gate and produce an updated debug APK.
+
+Exit: users can safely import and export independent `.txt` copies without storage permissions or regressions to local persistence.
+
 ## 10. Traceability
 
 | Feature specification | Primary implementation | Primary verification |
@@ -415,6 +427,93 @@ Exit: the installable debug APK and reproducible build/test instructions are ava
 | Plain-text editor | Per-draft `TextFieldValue` buffers | ViewModel isolation and editor device tests |
 | Local persistence | Room, debounce, stop flush, retry | Room reopen, lifecycle, and failure tests |
 | Editor appearance | Dark theme, layout, semantics | Compose accessibility and orientation tests |
+| Text file transfer | Storage Access Framework, document gateway, import transaction | Decoder, repository, ViewModel, and device picker tests |
+
+## 11. Text File Transfer Decisions
+
+The detailed behavior is defined by `specs/text-file-transfer/spec.md`. The following decisions extend the original architecture without turning the app into a filesystem editor.
+
+### Transfer Model
+
+- Import and export are explicit copy operations initiated through Android's system document picker.
+- Room remains authoritative. Imported drafts do not remember their source, and exported drafts do not remember their destination.
+- Support one document per operation; batch import, directories, sharing intents, recent-file history, autosave to external files, and linked-document editing are out of scope.
+- Support UTF-8 `.txt` content only. Import removes one leading UTF-8 byte-order mark, performs strict UTF-8 decoding, preserves remaining characters exactly, and rejects input over 1,048,576 bytes.
+- Export writes the current in-memory editor buffer as UTF-8 without a byte-order mark. It does not wait for or alter the normal Room debounce state.
+
+### Platform Boundary
+
+Add production code under `data/document/`:
+
+```text
+DocumentGateway.kt
+AndroidDocumentGateway.kt
+DocumentReference.kt
+DocumentTransferException.kt
+ImportedTextDocument.kt
+TextDocumentCodec.kt
+TextDocumentName.kt
+```
+
+`DocumentGateway` is the only app component that opens document URIs:
+
+```kotlin
+suspend fun readText(document: DocumentReference): ImportedTextDocument
+suspend fun writeText(document: DocumentReference, content: String)
+```
+
+- `DocumentReference` wraps the picker-provided URI as an opaque value so ViewModel unit tests do not depend on Android URI behavior; only the Android gateway parses it.
+- `AndroidDocumentGateway` uses `ContentResolver` on `Dispatchers.IO`.
+- Reads stop and fail as soon as they exceed the import limit; they do not load an unbounded stream.
+- Decoding reports malformed or unmappable UTF-8 instead of replacing bytes silently.
+- Writes open the provider destination in truncating mode and complete before success is reported.
+- The gateway does not retain URI permissions, cache file contents, log text, or expose provider exceptions directly.
+- Pure helpers derive imported draft names and suggested export names so naming behavior is unit-testable without Android I/O.
+
+### Repository Extension
+
+Extend `DraftRepository` with:
+
+```kotlin
+suspend fun createImportedDraft(name: String?, content: String): String
+```
+
+- A non-blank imported name is trimmed and stored as supplied after suffix removal by the naming helper.
+- A missing or blank imported name uses the same lowest-available `Untitled N` calculation as normal creation.
+- The repository inserts the new draft at `max(displayOrder) + 1` and selects it in one Room transaction.
+- The imported content and timestamps are present in the initial insert; no empty intermediate draft may be observable.
+- A failed transaction leaves drafts, ordering, content, and workspace selection unchanged.
+
+### ViewModel and UI Coordination
+
+- Add import and export actions, immutable pending-transfer state, and one-shot picker requests to the existing state/action model.
+- The UI uses `ActivityResultContracts.OpenDocument` with `text/plain` for import and `ActivityResultContracts.CreateDocument("text/plain")` for export.
+- A fixed overflow action beside the existing tab actions contains `Import text file` and `Export selected draft` so file operations do not crowd the scrolling tabs.
+- Starting export captures the selected draft ID, suggested file name, and latest `TextFieldValue.text`. The later picker result writes that captured snapshot, not content from another tab.
+- Import reports success only after the document is fully read and the repository transaction selects the new draft.
+- Cancel callbacks clear pending state silently. Duplicate or stale callbacks are ignored by operation identity.
+- Disable the corresponding menu action while its transfer is reading or writing, while leaving editing and the other transfer direction available.
+
+### Transfer Errors and Retry
+
+Add transfer-specific error categories instead of reusing Room storage failures:
+
+- `DocumentReadFailed`
+- `InvalidTextEncoding`
+- `DocumentTooLarge`
+- `ImportedDraftCreationFailed`
+- `DocumentWriteFailed`
+
+The existing error banner presents concise operation-specific messages. Retry reopens the appropriate system picker; export retry captures the then-current selected draft and text, and neither direction silently reuses a URI whose permission may have expired. Cancel and explicit dismissal clear the transfer error. Logs may include the error category but never URI strings, provider display names, draft names, or text.
+
+### Verification Additions
+
+- Pure unit tests cover strict UTF-8 decoding, byte-order-mark removal, the exact byte limit, display-name conversion, and export-name suffix handling.
+- Repository tests cover atomic imported-draft creation, automatic-name fallback, duplicate names, ordering, selection, and rollback.
+- ViewModel tests cover captured unsaved export text, stale draft IDs, duplicate callbacks, cancellation, busy state, every transfer failure, retry, and interaction with pending Room saves.
+- Instrumentation tests use controlled `content://` test documents to cover successful read/write, provider failures, and exact exported bytes.
+- Compose/device tests cover accessible menu actions, picker request dispatch, successful import/export flows, cancellation, error recovery, tab selection, background flush, and relaunch after import.
+- The merged manifest must continue to contain neither `INTERNET` nor storage permissions.
 
 ## Definition of Done
 
